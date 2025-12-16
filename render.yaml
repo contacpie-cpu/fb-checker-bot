@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: fb-checker-bot
+    env: python
+    plan: free
+    startCommand: python main.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_URL
+        sync: false

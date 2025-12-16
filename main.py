@@ -1,124 +1,153 @@
-import os
-import json
+import logging
 import requests
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    MessageHandler,
     ContextTypes,
-    filters,
 )
 
-TOKEN = os.getenv("BOT_TOKEN")
-WATCH_FILE = "watchlist.json"
+TOKEN = "PASTE_TELEGRAM_BOT_TOKEN_CUA_BAN_O_DAY"
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
 
-# ===== FB CHECK =====
-def check_facebook(url: str) -> str:
+WATCH_LIST = {}  # chat_id -> set(urls)
+
+
+def check_facebook(url: str):
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Linux; Android 10; SM-A505F) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/117.0 Mobile Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
     try:
-        if not url.startswith("http"):
-            url = "https://www.facebook.com/" + url
+        r = requests.get(
+            url,
+            headers=headers,
+            timeout=15,
+            allow_redirects=True,
+        )
+    except Exception:
+        return "UNKNOWN ❓", "Request failed"
 
-        r = requests.get(url, headers=HEADERS, timeout=10)
+    text = r.text.lower()
+    status = r.status_code
+    length = len(text)
 
-        if r.status_code == 200:
-            t = r.text.lower()
-            if "sorry, this page isn't available" in t:
-                return "DIE ❌"
-            if "log in" in t:
-                return "RESTRICTED ⚠️"
-            return "LIVE ✅"
+    if status in (404, 410) or "page isn’t available" in text:
+        return "DIE_CONFIRMED ❌", "404 / Page unavailable"
 
-        if r.status_code in [404, 410]:
-            return "DIE ❌"
+    if "checkpoint" in text or "review the decision" in text:
+        return "CHECKPOINT ⚠️", "Facebook checkpoint"
 
-        return "UNKNOWN ⚠️"
-    except:
-        return "ERROR ⚠️"
+    if "this content isn’t available right now" in text:
+        return "PRIVATE 🔒", "Privacy restriction"
 
-# ===== STORAGE =====
-def load_watchlist():
-    if not os.path.exists(WATCH_FILE):
-        return {}
-    with open(WATCH_FILE, "r") as f:
-        return json.load(f)
+    if "log in to facebook" in text or "login to continue" in text:
+        return "LIVE_LIMITED ⚠️", "Login required"
 
-def save_watchlist(data):
-    with open(WATCH_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    if length < 800:
+        return "BLOCKED_IP ⚠️", "Blocked datacenter IP"
 
-# ===== COMMANDS =====
+    return "LIVE_PUBLIC ✅", "Public access"
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 FB Checker Bot\n"
-        "/watch <link|uid> – theo dõi FB DIE\n"
-        "Gửi link để check LIVE/DIE"
+        "🤖 FB Checker Bot đã hoạt động\n\n"
+        "Lệnh sử dụng:\n"
+        "/check <link_fb>\n"
+        "/watch <link_fb>\n"
+        "/list"
     )
 
-async def watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Dùng: /watch <link hoặc UID>")
+        await update.message.reply_text("❌ Vui lòng nhập link Facebook")
         return
 
     url = context.args[0]
-    chat_id = str(update.message.chat_id)
-
-    data = load_watchlist()
-    status = check_facebook(url)
-
-    data[url] = {
-        "chat_id": chat_id,
-        "last_status": status
-    }
-    save_watchlist(data)
+    status, reason = check_facebook(url)
 
     await update.message.reply_text(
-        f"👀 Đã theo dõi:\n{url}\nTrạng thái: {status}"
+        f"🔎 Kết quả kiểm tra\n"
+        f"📄 Link: {url}\n"
+        f"📌 Trạng thái: {status}\n"
+        f"📝 Lý do: {reason}"
     )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lines = update.message.text.splitlines()
-    result = []
 
-    for line in lines:
-        status = check_facebook(line.strip())
-        result.append(f"{line.strip()} → {status}")
+async def watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❌ Vui lòng nhập link Facebook")
+        return
 
-    await update.message.reply_text("\n".join(result))
+    url = context.args[0]
+    chat_id = update.effective_chat.id
 
-# ===== AUTO MONITOR =====
+    WATCH_LIST.setdefault(chat_id, set()).add(url)
+
+    await update.message.reply_text(
+        f"👀 Đã theo dõi:\n{url}\n\nBot sẽ tự kiểm tra định kỳ."
+    )
+
+
+async def list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    urls = WATCH_LIST.get(chat_id)
+
+    if not urls:
+        await update.message.reply_text("📭 Chưa theo dõi link nào")
+        return
+
+    text = "📋 Danh sách đang theo dõi:\n"
+    for u in urls:
+        text += f"- {u}\n"
+
+    await update.message.reply_text(text)
+
+
 async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
-    data = load_watchlist()
+    for chat_id, urls in WATCH_LIST.items():
+        for url in urls:
+            status, reason = check_facebook(url)
 
-    for url, info in data.items():
-        old = info["last_status"]
-        new = check_facebook(url)
+            if status == "LIVE_PUBLIC ✅":
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "🚨 FACEBOOK ĐÃ SỐNG LẠI\n\n"
+                        f"📄 Link: {url}\n"
+                        f"📌 Trạng thái: {status}\n"
+                        f"📝 Lý do: {reason}"
+                    ),
+                )
 
-        if old.startswith("DIE") and new.startswith("LIVE"):
-            await context.bot.send_message(
-                chat_id=info["chat_id"],
-                text=f"🚨 FB ĐÃ SỐNG LẠI!\n\n{url}\n{new}"
-            )
 
-        data[url]["last_status"] = new
-
-    save_watchlist(data)
-
-# ===== MAIN =====
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("watch", watch))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CommandHandler("check", check_cmd))
+    app.add_handler(CommandHandler("watch", watch_cmd))
+    app.add_handler(CommandHandler("list", list_cmd))
 
-    app.job_queue.run_repeating(monitor_job, interval=300, first=60)
+    app.job_queue.run_repeating(
+        monitor_job,
+        interval=300,
+        first=60,
+    )
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,5 @@
+from server import keep_alive
+keep_alive()
 import logging
 import requests
 from telegram import Update

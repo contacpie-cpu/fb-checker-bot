@@ -1,5 +1,3 @@
-from server import keep_alive
-keep_alive()
 import logging
 import requests
 from telegram import Update
@@ -9,6 +7,8 @@ from telegram.ext import (
     ContextTypes,
 )
 
+from server import keep_alive
+keep_alive()
 TOKEN = "PASTE_TELEGRAM_BOT_TOKEN_CUA_BAN_O_DAY"
 
 logging.basicConfig(
